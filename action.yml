@@ -1,84 +1,60 @@
-name: 'Ultimate Windows Runner Bleach'
-description: 'Purges all bloatware, heavy SDKs, databases, and toolcaches from GitHub Actions Windows runners, leaving only the bare essentials.'
-inputs:
-  enable:
-    description: 'Enable or disable runner cleanup (true/false)'
-    required: false
-    default: 'true'
+name: Cleanup
 
-runs:
-  using: 'composite'
-  steps:
-    - name: Check Bleach Status
-      shell: powershell
-      run: |
-        $enabled = "${{ inputs.enable }}"
-        if ($enabled -ne 'true') {
-            Write-Host "Bleach is disabled. Skipping cleanup."
-            exit 0
-        }
-        Write-Host "Bleach is ENABLED. Starting total purge..."
+on:
+  workflow_dispatch:
+    inputs:
+      enable:
+        description: 'Enable cleanup steps'
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
-    - name: Stop Conflicting Services and Processes
-      if: ${{ inputs.enable == 'true' }}
-      shell: powershell
-      run: |
-        $services = @('postgresql-x64-17', 'MongoDB', 'Apache', 'nginx', 'W3SVC', 'IISAdmin', 'sqlservr', 'MSSQLSERVER')
-        foreach ($svc in $services) {
-            if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-                Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
-                Set-Service -Name $svc -StartupType Disabled -ErrorAction SilentlyContinue
-                Write-Host "Stopped and disabled service: $svc"
-            }
-        }
+jobs:
+  cleanup:
+    runs-on: windows-latest
+    steps:
+      - name: Stop Conflicting Services and Processes
+        if: ${{ inputs.enable == 'true' }}
+        shell: powershell
+        run: |
+          $services = @('postgresql-x64-17', 'MongoDB', 'Apache', 'nginx', 'W3SVC', 'docker', 'WaaSMedicSvc', 'wuauserv')
+          foreach ($svc in $services) {
+              if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
+                  Write-Host "Stopping service: $svc"
+                  Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+              }
+          }
+          
+          $processes = @('postgres', 'mongod', 'httpd', 'nginx', 'w3wp', 'docker')
+          foreach ($proc in $processes) {
+              Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          }
 
-    - name: Uninstall Unwanted MSI Products and Packages
-      if: ${{ inputs.enable == 'true' }}
-      shell: powershell
-      run: |
-        $blacklist = @(
-            'AWS', 'Azure', 'Python', 'Perl', 'MongoDB', 'MySQL', 'PostgreSQL', 
-            'WiX', 'sbt', 'Node.js', 'Docker', 'Kubernetes', 'Xamarin', 
-            'Android SDK', 'MAUI', 'iOS', 'MacCatalyst', 'SQL Server'
-        )
-        
-        $installed = Get-WmiObject Win32_Product | Select-Object Name, IdentifyingNumber
-        foreach ($app in $installed) {
-            foreach ($term in $blacklist) {
-                if ($app.Name -like "*$term*") {
-                    Write-Host "Uninstalling: $($app.Name)"
-                    $product = [wmi]"Win32_Product.IdentifyingNumber='$($app.IdentifyingNumber)'"
-                    if ($product) { $product.Uninstall() | Out-Null }
-                    break
-                }
-            }
-        }
-
-    - name: Obliterate Heavy Directories and Tool Caches
-      if: ${{ inputs.enable == 'true' }}
-      shell: powershell
-      run: |
-        $pathsToClean = @(
-            "C:\hostedtoolcache",
-            "C:\Program Files (x86)\Android",
-            "C:\Program Files\Android",
-            "C:\ProgramData\Chocolatey",
-            "C:\Tools",
-            "C:\Perl64",
-            "C:\sbt",
-            "C:\npm",
-            "C:\pip"
-        )
-
-        foreach ($path in $pathsToClean) {
-            if (Test-Path $path) {
-                Write-Host "Deleting heavy directory: $path"
-                Remove-Item -Path $path -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-
-        Remove-Item -Path "C:\Windows\Temp\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
-        
-        Write-Host "Disk space after cleanup:"
-        Get-PSDrive C | Select-Object Used, Free
+      - name: Uninstall Unwanted MSI Products and Packages
+        if: ${{ inputs.enable == 'true' }}
+        shell: powershell
+        run: |
+          $blacklist = @('AWS', 'Azure', 'Python', 'Perl', 'MongoDB', 'MySQL', 'PostgreSQL', 'WiX', 'sbt', 'Node.js', 'Docker', 'Kubernetes', 'Xamarin', 'Android SDK', 'MAUI', 'iOS', 'MacCatalyst', 'SQL Server')
+          
+          $paths = @(
+              "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+              "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+          )
+          
+          $apps = Get-ItemProperty $paths | Where-Object { $_.DisplayName -ne $null }
+          foreach ($app in $apps) {
+              foreach ($term in $blacklist) {
+                  if ($app.DisplayName -like "*$term*") {
+                      $uninstallString = $app.UninstallString
+                      if ($uninstallString -like "*msiexec*") {
+                          Write-Host "Silently uninstalling: $($app.DisplayName)"
+                          $quietArgs = $uninstallString -replace "/I", "/X" -replace "/i", "/x"
+                          if ($quietArgs -notlike "*/quiet*") { $quietArgs += " /quiet /norestart" }
+                          Start-Process cmd.exe -ArgumentList "/c $quietArgs" -Wait -NoNewWindow
+                      }
+                      break
+                  }
+              }
+          }
