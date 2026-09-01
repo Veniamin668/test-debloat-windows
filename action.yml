@@ -1,55 +1,711 @@
 name: 'Windows Debloat & Cleanup'
-description: 'Stops conflicting services and silently uninstalls unwanted MSI products'
+description: 'Removes unwanted third-party software from Windows GitHub Actions runners while preserving Firefox, Visual Studio, Git and GitHub CLI'
+author: 'Windows Debloat & Cleanup'
 
 inputs:
-  enable:
-    description: 'Enable cleanup steps'
-    required: false
-    default: 'true'
+enable:
+description: 'Enable cleanup'
+required: false
+default: 'true'
+
+remove_services:
+description: 'Stop and remove known third-party services'
+required: false
+default: 'true'
 
 runs:
-  using: 'composite'
-  steps:
-    - name: Stop Conflicting Services and Processes
-      if: ${{ inputs.enable == 'true' }}
-      shell: powershell
-      run: |
-        $services = @('postgresql-x64-17', 'MongoDB', 'Apache', 'nginx', 'W3SVC', 'docker', 'WaaSMedicSvc', 'wuauserv')
-        foreach ($svc in $services) {
-            if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
-                Write-Host "Stopping service: $svc"
-                Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+using: 'composite'
+
+steps:
+
+```
+# ============================================================
+# 1. STOP KNOWN THIRD-PARTY SERVICES
+# ============================================================
+
+- name: Stop conflicting services
+  if: ${{ inputs.enable == 'true' && inputs.remove_services == 'true' }}
+  shell: powershell
+  run: |
+    $ErrorActionPreference = 'Continue'
+
+    $services = @(
+        'postgresql-x64-17',
+        'MongoDB',
+        'Apache',
+        'nginx',
+        'docker',
+        'MSSQLSERVER',
+        'MSSQL$SQLEXPRESS',
+        'SQLWriter',
+        'SQLTELEMETRY',
+        'SQLAgent$SQLEXPRESS',
+        'MsDtsServer',
+        'Tailscale',
+        'FabricHostSvc',
+        'WSAIFabricSvc',
+        'HgClientService',
+        'hpatchmon',
+        'ZTHELPER'
+    ) | Sort-Object -Unique
+
+    foreach ($name in $services) {
+
+        $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+
+        if ($null -ne $service) {
+
+            Write-Host "[STOP] $name"
+
+            try {
+                Stop-Service `
+                    -Name $name `
+                    -Force `
+                    -ErrorAction SilentlyContinue
+            }
+            catch {
+                Write-Warning "Failed to stop $name"
             }
         }
-        
-        $processes = @('postgres', 'mongod', 'httpd', 'nginx', 'w3wp', 'docker')
-        foreach ($proc in $processes) {
-            Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+
+
+# ============================================================
+# 2. STOP PROCESSES THAT CAN BLOCK UNINSTALLERS
+# ============================================================
+
+- name: Stop third-party processes
+  if: ${{ inputs.enable == 'true' }}
+  shell: powershell
+  run: |
+    $ErrorActionPreference = 'Continue'
+
+    $processes = @(
+        'postgres',
+        'postgresql',
+        'mongod',
+        'mongo',
+        'httpd',
+        'nginx',
+        'docker',
+        'dockerd',
+        'com.docker.backend',
+        'mysqld',
+        'mysql',
+        'w3wp',
+        'tailscaled',
+        'sshd',
+        'node',
+        'npm',
+        'npx',
+        'sbt'
+    ) | Sort-Object -Unique
+
+    foreach ($name in $processes) {
+
+        Get-Process `
+            -Name $name `
+            -ErrorAction SilentlyContinue |
+            Stop-Process `
+                -Force `
+                -ErrorAction SilentlyContinue
+    }
+
+
+# ============================================================
+# 3. FIND ALL INSTALLED DESKTOP APPLICATIONS
+#
+# We deliberately DO NOT use Win32_Product.
+# Win32_Product can trigger MSI repair operations.
+# ============================================================
+
+- name: Discover installed software
+  if: ${{ inputs.enable == 'true' }}
+  shell: powershell
+  run: |
+    $ErrorActionPreference = 'Continue'
+
+    $registryPaths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+
+    $apps = @()
+
+    foreach ($path in $registryPaths) {
+
+        try {
+            $apps += Get-ItemProperty `
+                -Path $path `
+                -ErrorAction SilentlyContinue
+        }
+        catch {}
+    }
+
+    $apps = $apps |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.DisplayName)
+        } |
+        Sort-Object DisplayName, PSPath -Unique
+
+    Write-Host ""
+    Write-Host "============================================================"
+    Write-Host "INSTALLED SOFTWARE"
+    Write-Host "============================================================"
+
+    foreach ($app in $apps) {
+        Write-Host $app.DisplayName
+    }
+
+    Write-Host ""
+    Write-Host "Total applications found: $($apps.Count)"
+
+    $apps |
+        Select-Object `
+            DisplayName,
+            DisplayVersion,
+            Publisher,
+            InstallLocation,
+            UninstallString,
+            QuietUninstallString,
+            PSPath |
+        ConvertTo-Json -Depth 5 |
+        Set-Content `
+            -Path "$env:RUNNER_TEMP\installed-apps.json" `
+            -Encoding UTF8
+
+
+# ============================================================
+# 4. ALLOWLIST / PROTECTED SOFTWARE
+#
+# EVERYTHING NOT PROTECTED IS A CANDIDATE FOR REMOVAL.
+# ============================================================
+
+- name: Remove non-allowed software
+  if: ${{ inputs.enable == 'true' }}
+  shell: powershell
+  run: |
+    $ErrorActionPreference = 'Continue'
+
+    # --------------------------------------------------------
+    # NEVER REMOVE THESE
+    # --------------------------------------------------------
+
+    $allowPatterns = @(
+
+        # Firefox
+        '(?i)\bMozilla Firefox\b',
+        '(?i)^Firefox\b',
+
+        # Visual Studio
+        '(?i)\bMicrosoft Visual Studio\b',
+        '(?i)^Visual Studio\b',
+        '(?i)^Visual Studio Build Tools\b',
+        '(?i)^Visual Studio Installer\b',
+        '(?i)^VS Installer\b',
+
+        # Visual Studio internal MSI/component names
+        '(?i)^vs_',
+        '(?i)^sptools_Microsoft\.VisualStudio',
+        '(?i)^Microsoft Visual Studio Setup',
+
+        # Git
+        '(?i)^Git$',
+        '(?i)^Git for Windows\b',
+        '(?i)^Git Credential Manager',
+
+        # GitHub CLI
+        '(?i)^GitHub CLI$',
+        '(?i)^GitHub Command Line Interface\b'
+    )
+
+
+    # --------------------------------------------------------
+    # WINDOWS COMPONENTS
+    #
+    # These are protected independently from the allowlist.
+    # --------------------------------------------------------
+
+    $systemPatterns = @(
+
+        # Windows
+        '(?i)^Microsoft Windows',
+        '(?i)^Microsoft\.Windows',
+        '(?i)^MicrosoftWindows\.',
+        '(?i)^Windows\.',
+        '(?i)^Windows ',
+
+        # Edge / WebView
+        '(?i)^Microsoft Edge',
+        '(?i)^Microsoft Edge WebView',
+        '(?i)^Microsoft WebView',
+
+        # Windows App Installer
+        '(?i)^Microsoft\.DesktopAppInstaller',
+
+        # .NET
+        '(?i)^Microsoft \.NET Framework',
+        '(?i)^Microsoft \.NET Runtime',
+        '(?i)^Microsoft \.NET Host',
+        '(?i)^Microsoft \.NET SDK',
+        '(?i)^Microsoft \.NET Targeting Pack',
+        '(?i)^Microsoft\.NETCore',
+        '(?i)^Microsoft\.NET',
+        '(?i)^Microsoft ASP\.NET Core',
+        '(?i)^Microsoft ASP\.NET',
+
+        # Native runtime
+        '(?i)^Microsoft \.NET Native',
+        '(?i)^Microsoft\.VCLibs',
+
+        # Visual C++ runtimes
+        '(?i)^Microsoft Visual C\+\+.*Runtime',
+        '(?i)^Microsoft Visual C\+\+.*Redistributable',
+        '(?i)^Visual C\+\+ Library CRT',
+
+        # Universal CRT
+        '(?i)^Universal CRT',
+
+        # Windows SDK
+        '(?i)^Windows SDK',
+        '(?i)^Microsoft SDK',
+
+        # Windows Runtime
+        '(?i)^WinRT',
+
+        # Windows App Runtime
+        '(?i)^Microsoft Windows App Runtime',
+        '(?i)^Microsoft\.WindowsAppRuntime',
+
+        # Security / system UI
+        '(?i)^Microsoft\.SecHealthUI',
+        '(?i)^Microsoft\.AAD\.',
+        '(?i)^Microsoft\.AccountsControl',
+        '(?i)^Microsoft\.BioEnrollment',
+        '(?i)^Microsoft\.CredDialogHost',
+        '(?i)^Microsoft\.LockApp',
+        '(?i)^Microsoft\.Shell',
+
+        # Microsoft system infrastructure
+        '(?i)^Microsoft\.UI\.Xaml',
+        '(?i)^Microsoft\.Win32WebViewHost',
+        '(?i)^Microsoft\.WindowsAppRuntime',
+
+        # PowerShell
+        '(?i)^PowerShell\b',
+        '(?i)^PowerShell 7',
+
+        # GitHub Actions dependencies
+        '(?i)^GitHub Actions',
+        '(?i)^Runner'
+    )
+
+
+    function Test-MatchAny {
+        param(
+            [string]$Name,
+            [string[]]$Patterns
+        )
+
+        foreach ($pattern in $Patterns) {
+
+            if ($Name -match $pattern) {
+                return $true
+            }
         }
 
-    - name: Uninstall Unwanted MSI Products and Packages
-      if: ${{ inputs.enable == 'true' }}
-      shell: powershell
-      run: |
-        $blacklist = @('AWS', 'Azure', 'Python', 'Perl', 'MongoDB', 'MySQL', 'PostgreSQL', 'WiX', 'sbt', 'Node.js', 'Docker', 'Kubernetes', 'Xamarin', 'Android SDK', 'MAUI', 'iOS', 'MacCatalyst', 'SQL Server')
-        
-        $paths = @(
-            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-            "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-        )
-        
-        $apps = Get-ItemProperty $paths | Where-Object { $_.DisplayName -ne $null }
-        foreach ($app in $apps) {
-            foreach ($term in $blacklist) {
-                if ($app.DisplayName -like "*$term*") {
-                    $uninstallString = $app.UninstallString
-                    if ($uninstallString -like "*msiexec*") {
-                        Write-Host "Silently uninstalling: $($app.DisplayName)"
-                        $quietArgs = $uninstallString -replace "/I", "/X" -replace "/i", "/x"
-                        if ($quietArgs -notlike "*/quiet*") { $quietArgs += " /quiet /norestart" }
-                        Start-Process cmd.exe -ArgumentList "/c $quietArgs" -Wait -NoNewWindow
-                    }
-                    break
+        return $false
+    }
+
+
+    # --------------------------------------------------------
+    # GET INSTALLED APPLICATIONS
+    # --------------------------------------------------------
+
+    $registryPaths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+
+    $apps = @()
+
+    foreach ($path in $registryPaths) {
+
+        try {
+            $apps += Get-ItemProperty `
+                -Path $path `
+                -ErrorAction SilentlyContinue
+        }
+        catch {}
+    }
+
+    $apps = $apps |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.DisplayName)
+        } |
+        Sort-Object DisplayName, PSPath -Unique
+
+
+    $removed = 0
+    $kept = 0
+    $failed = 0
+    $noUninstaller = 0
+
+
+    foreach ($app in $apps) {
+
+        $name = $app.DisplayName
+
+        # ----------------------------------------------------
+        # ALLOWLIST
+        # ----------------------------------------------------
+
+        if (Test-MatchAny -Name $name -Patterns $allowPatterns) {
+
+            Write-Host "[KEEP] $name"
+            $kept++
+            continue
+        }
+
+
+        # ----------------------------------------------------
+        # SYSTEM COMPONENT
+        # ----------------------------------------------------
+
+        if (Test-MatchAny -Name $name -Patterns $systemPatterns) {
+
+            Write-Host "[SYSTEM] $name"
+            $kept++
+            continue
+        }
+
+
+        # ----------------------------------------------------
+        # UNINSTALL COMMAND
+        # ----------------------------------------------------
+
+        $uninstall = $app.QuietUninstallString
+
+        if ([string]::IsNullOrWhiteSpace($uninstall)) {
+            $uninstall = $app.UninstallString
+        }
+
+
+        if ([string]::IsNullOrWhiteSpace($uninstall)) {
+
+            Write-Host "[NO UNINSTALLER] $name"
+            $noUninstaller++
+            continue
+        }
+
+
+        Write-Host ""
+        Write-Host "============================================================"
+        Write-Host "[REMOVE] $name"
+        Write-Host "============================================================"
+
+
+        try {
+
+            # ------------------------------------------------
+            # MSI
+            # ------------------------------------------------
+
+            if ($uninstall -match '(?i)msiexec(?:\.exe)?') {
+
+                $command = $uninstall
+
+                # /I -> /X
+                $command = $command -replace `
+                    '(?i)\s+/I(?=\s|{)', `
+                    ' /X'
+
+                $command = $command -replace `
+                    '(?i)\s+/i(?=\s|{)', `
+                    ' /X'
+
+
+                # Add silent parameters.
+                if ($command -notmatch '(?i)\s/(quiet|qn)\b') {
+
+                    $command += ' /quiet /norestart'
+                }
+
+
+                Write-Host "MSI command:"
+                Write-Host $command
+
+
+                $process = Start-Process `
+                    -FilePath 'cmd.exe' `
+                    -ArgumentList "/c $command" `
+                    -Wait `
+                    -PassThru `
+                    -NoNewWindow
+
+
+                if (
+                    $process.ExitCode -eq 0 -or
+                    $process.ExitCode -eq 1605 -or
+                    $process.ExitCode -eq 1614 -or
+                    $process.ExitCode -eq 3010
+                ) {
+
+                    Write-Host "[REMOVED] $name"
+                    $removed++
+                }
+                else {
+
+                    Write-Warning `
+                        "[FAILED] $name - MSI exit code $($process.ExitCode)"
+
+                    $failed++
+                }
+
+                continue
+            }
+
+
+            # ------------------------------------------------
+            # EXE
+            # ------------------------------------------------
+
+            $command = $uninstall
+
+
+            # Inno Setup
+            if ($command -match '(?i)unins\d*\.exe') {
+
+                if ($command -notmatch '(?i)/VERYSILENT') {
+
+                    $command += `
+                        ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
                 }
             }
+
+            # NSIS
+            elseif ($command -match '(?i)uninstall\.exe') {
+
+                if ($command -notmatch '(?i)/S\b') {
+
+                    $command += ' /S'
+                }
+            }
+
+            # Generic setup
+            elseif ($command -match '(?i)setup\.exe') {
+
+                if ($command -notmatch '(?i)(/quiet|/silent|/s)\b') {
+
+                    $command += ' /quiet /norestart'
+                }
+            }
+
+            # Unknown executable
+            else {
+
+                Write-Warning `
+                    "[SKIP] No known silent uninstall method: $name"
+
+                $noUninstaller++
+                continue
+            }
+
+
+            Write-Host "EXE command:"
+            Write-Host $command
+
+
+            $process = Start-Process `
+                -FilePath 'cmd.exe' `
+                -ArgumentList "/c $command" `
+                -Wait `
+                -PassThru `
+                -NoNewWindow
+
+
+            if (
+                $process.ExitCode -eq 0 -or
+                $process.ExitCode -eq 1605 -or
+                $process.ExitCode -eq 1614 -or
+                $process.ExitCode -eq 3010
+            ) {
+
+                Write-Host "[REMOVED] $name"
+                $removed++
+            }
+            else {
+
+                Write-Warning `
+                    "[FAILED] $name - exit code $($process.ExitCode)"
+
+                $failed++
+            }
+
         }
+        catch {
+
+            Write-Warning "[ERROR] $name"
+            Write-Warning $_
+
+            $failed++
+        }
+    }
+
+
+    Write-Host ""
+    Write-Host ""
+    Write-Host "============================================================"
+    Write-Host "CLEANUP SUMMARY"
+    Write-Host "============================================================"
+    Write-Host "Removed             : $removed"
+    Write-Host "Preserved           : $kept"
+    Write-Host "Failed              : $failed"
+    Write-Host "No silent uninstaller: $noUninstaller"
+    Write-Host "============================================================"
+
+
+# ============================================================
+# 5. CLEAN UP KNOWN THIRD-PARTY SERVICES LEFT BEHIND
+# ============================================================
+
+- name: Remove leftover third-party services
+  if: ${{ inputs.enable == 'true' && inputs.remove_services == 'true' }}
+  shell: powershell
+  run: |
+    $ErrorActionPreference = 'Continue'
+
+    $services = @(
+        'postgresql-x64-17',
+        'MongoDB',
+        'Apache',
+        'nginx',
+        'docker',
+        'MSSQLSERVER',
+        'MSSQL$SQLEXPRESS',
+        'SQLWriter',
+        'SQLTELEMETRY',
+        'SQLAgent$SQLEXPRESS',
+        'MsDtsServer',
+        'Tailscale',
+        'FabricHostSvc',
+        'WSAIFabricSvc',
+        'HgClientService',
+        'hpatchmon',
+        'ZTHELPER'
+    ) | Sort-Object -Unique
+
+
+    foreach ($name in $services) {
+
+        $service = Get-Service `
+            -Name $name `
+            -ErrorAction SilentlyContinue
+
+        if ($null -eq $service) {
+            continue
+        }
+
+
+        Write-Host "[DELETE SERVICE] $name"
+
+        try {
+
+            & sc.exe delete $name
+
+        }
+        catch {
+
+            Write-Warning `
+                "Could not delete service $name"
+        }
+    }
+
+
+# ============================================================
+# 6. FINAL VERIFICATION
+# ============================================================
+
+- name: Verify allowlist
+  if: ${{ inputs.enable == 'true' }}
+  shell: powershell
+  run: |
+    $ErrorActionPreference = 'Continue'
+
+    $registryPaths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+
+    $apps = @()
+
+    foreach ($path in $registryPaths) {
+
+        $apps += Get-ItemProperty `
+            -Path $path `
+            -ErrorAction SilentlyContinue
+    }
+
+
+    $apps = $apps |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_.DisplayName)
+        } |
+        Sort-Object DisplayName -Unique
+
+
+    Write-Host ""
+    Write-Host "============================================================"
+    Write-Host "PRESERVED SOFTWARE"
+    Write-Host "============================================================"
+
+
+    $firefox = $apps |
+        Where-Object {
+            $_.DisplayName -match '(?i)Firefox'
+        }
+
+    $visualStudio = $apps |
+        Where-Object {
+            $_.DisplayName -match '(?i)(Visual Studio|^vs_|sptools_Microsoft\.VisualStudio)'
+        }
+
+    $git = $apps |
+        Where-Object {
+            $_.DisplayName -match '(?i)^Git($| for Windows| Credential Manager)'
+        }
+
+    $github = $apps |
+        Where-Object {
+            $_.DisplayName -match '(?i)^GitHub CLI$'
+        }
+
+
+    foreach ($app in $firefox) {
+        Write-Host "[FIREFOX] $($app.DisplayName)"
+    }
+
+    foreach ($app in $visualStudio) {
+        Write-Host "[VISUAL STUDIO] $($app.DisplayName)"
+    }
+
+    foreach ($app in $git) {
+        Write-Host "[GIT] $($app.DisplayName)"
+    }
+
+    foreach ($app in $github) {
+        Write-Host "[GITHUB CLI] $($app.DisplayName)"
+    }
+
+
+    Write-Host ""
+    Write-Host "============================================================"
+    Write-Host "Windows Debloat & Cleanup completed."
+    Write-Host "============================================================"
+```
