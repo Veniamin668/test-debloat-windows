@@ -35,7 +35,6 @@ runs:
           'SQLTELEMETRY',
           'SQLAgent$SQLEXPRESS',
           'MsDtsServer',
-          'Tailscale',
           'FabricHostSvc',
           'WSAIFabricSvc',
           'HgClientService',
@@ -77,7 +76,6 @@ runs:
           'mysqld',
           'mysql',
           'w3wp',
-          'tailscaled',
           'node',
           'npm',
           'npx',
@@ -149,6 +147,8 @@ runs:
           '(?i)^Visual Studio Installer\b',
           '(?i)^VS Installer\b',
 
+          '(?i)^Tailscale\b',
+          '(?i)^Tailscale Inc\b',
           # Visual Studio internal components
           '(?i)^vs_',
           '(?i)^sptools_Microsoft\.VisualStudio',
