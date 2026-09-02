@@ -1,5 +1,5 @@
 name: Windows Debloat & Cleanup
-description: Aggressive Windows runner cleanup with Firefox, Visual Studio, Git, GitHub CLI, Tailscale and Docker preserved
+description: Aggressive Windows runner cleanup with selected development tools preserved
 author: Windows Debloat & Cleanup
 
 inputs:
@@ -9,7 +9,7 @@ inputs:
     default: 'true'
 
   remove_services:
-    description: Stop and remove unwanted third-party services
+    description: Stop and remove unwanted services
     required: false
     default: 'true'
 
@@ -23,7 +23,7 @@ runs:
 
     - name: Stop unwanted services
       if: ${{ inputs.enable == 'true' && inputs.remove_services == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -53,7 +53,7 @@ runs:
               Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
             }
             catch {
-              Write-Warning "Failed to stop $name"
+              Write-Warning "Failed to stop service: $name"
             }
           }
         }
@@ -65,7 +65,7 @@ runs:
 
     - name: Stop unwanted processes
       if: ${{ inputs.enable == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -79,10 +79,6 @@ runs:
           'mysqld',
           'mysql',
           'w3wp',
-          'node',
-          'npm',
-          'npx',
-          'sbt',
           'java',
           'javaw',
           'python',
@@ -90,8 +86,7 @@ runs:
           'conda',
           'ruby',
           'perl',
-          'dotnet',
-          'msbuild'
+          'dotnet'
         )
 
         foreach ($name in $processes) {
@@ -106,7 +101,7 @@ runs:
 
     - name: Remove hosted tool cache
       if: ${{ inputs.enable == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -135,12 +130,12 @@ runs:
 
 
     # ============================================================
-    # REMOVE ANDROID DIRECTORY FROM PROGRAM FILES (X86)
+    # REMOVE ANDROID FROM PROGRAM FILES (X86)
     # ============================================================
 
     - name: Remove Android directory
       if: ${{ inputs.enable == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -185,7 +180,7 @@ runs:
 
     - name: Discover installed software
       if: ${{ inputs.enable == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -228,7 +223,7 @@ runs:
 
 
     # ============================================================
-    # AGGRESSIVE ALLOWLIST CLEANUP
+    # ALLOWLIST CLEANUP
     #
     # KEEP:
     #   Firefox
@@ -237,6 +232,10 @@ runs:
     #   GitHub CLI
     #   Tailscale
     #   Docker
+    #   WSL
+    #   Kubernetes
+    #   Node.js / npm / npx
+    #   PowerShell 7
     #
     # REMOVE:
     #   Everything else with a registered uninstaller
@@ -244,7 +243,7 @@ runs:
 
     - name: Remove everything except allowlist
       if: ${{ inputs.enable == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -270,8 +269,6 @@ runs:
           '(?i)^Visual Studio Build Tools\b',
           '(?i)^Visual Studio Installer\b',
           '(?i)^VS Installer\b',
-
-          # Visual Studio internal packages / MSI names
           '(?i)^vs_',
           '(?i)^sptools_Microsoft\.VisualStudio',
           '(?i)^Microsoft Visual Studio Setup',
@@ -309,7 +306,52 @@ runs:
           '(?i)^Docker CLI\b',
           '(?i)^Docker CE\b',
           '(?i)^Docker Inc\.',
-          '(?i)^Docker Desktop Installer\b'
+          '(?i)^Docker Desktop Installer\b',
+
+          # ------------------------------------------------------
+          # WSL
+          # ------------------------------------------------------
+
+          '(?i)^Windows Subsystem for Linux\b',
+          '(?i)^WSL\b',
+          '(?i)^Windows Subsystem for Linux Update\b',
+
+          # Linux distributions commonly registered as apps
+          '(?i)^Ubuntu\b',
+          '(?i)^Debian\b',
+          '(?i)^Kali Linux\b',
+          '(?i)^Oracle Linux\b',
+          '(?i)^SUSE Linux\b',
+          '(?i)^openSUSE\b',
+
+          # ------------------------------------------------------
+          # KUBERNETES
+          # ------------------------------------------------------
+
+          '(?i)^Kubernetes\b',
+          '(?i)^Kubernetes CLI\b',
+          '(?i)^kubectl\b',
+          '(?i)^Minikube\b',
+          '(?i)^kind\b',
+
+          # ------------------------------------------------------
+          # NODE.JS
+          # ------------------------------------------------------
+
+          '(?i)^Node\.js\b',
+          '(?i)^NodeJS\b',
+          '(?i)^Node\.js Runtime\b',
+          '(?i)^npm\b',
+          '(?i)^npx\b',
+
+          # ------------------------------------------------------
+          # POWERSHELL 7
+          # ------------------------------------------------------
+
+          '(?i)^PowerShell 7\b',
+          '(?i)^PowerShell 7-preview\b',
+          '(?i)^PowerShell Core\b',
+          '(?i)^PowerShell\b'
         )
 
 
@@ -373,7 +415,7 @@ runs:
           $name = $app.DisplayName
 
           # ------------------------------------------------------
-          # KEEP ALLOWLISTED SOFTWARE
+          # KEEP ALLOWLIST
           # ------------------------------------------------------
 
           if (Test-Allowlist -Name $name) {
@@ -417,7 +459,6 @@ runs:
 
               $command = $uninstall
 
-              # Convert installation operation to uninstall.
               $command = $command -replace `
                 '(?i)\s+/I(?=\s|{)', `
                 ' /X'
@@ -426,15 +467,12 @@ runs:
                 '(?i)\s+/i(?=\s|{)', `
                 ' /X'
 
-
               if ($command -notmatch '(?i)\s/(quiet|qn)\b') {
                 $command += ' /quiet /norestart'
               }
 
-
               Write-Host "MSI command:"
               Write-Host $command
-
 
               $process = Start-Process `
                 -FilePath 'cmd.exe' `
@@ -443,19 +481,16 @@ runs:
                 -PassThru `
                 -NoNewWindow
 
-
               if (
                 $process.ExitCode -eq 0 -or
                 $process.ExitCode -eq 1605 -or
                 $process.ExitCode -eq 1614 -or
                 $process.ExitCode -eq 3010
               ) {
-
                 Write-Host "[REMOVED] $name"
                 $removed++
               }
               else {
-
                 Write-Warning `
                   "[FAILED] $name - MSI exit code $($process.ExitCode)"
 
@@ -479,10 +514,8 @@ runs:
                   ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
               }
 
-
               Write-Host "Inno Setup command:"
               Write-Host $command
-
 
               $process = Start-Process `
                 -FilePath 'cmd.exe' `
@@ -491,17 +524,14 @@ runs:
                 -PassThru `
                 -NoNewWindow
 
-
               if (
                 $process.ExitCode -eq 0 -or
                 $process.ExitCode -eq 3010
               ) {
-
                 Write-Host "[REMOVED] $name"
                 $removed++
               }
               else {
-
                 Write-Warning `
                   "[FAILED] $name - exit code $($process.ExitCode)"
 
@@ -524,10 +554,8 @@ runs:
                 $command += ' /S'
               }
 
-
               Write-Host "NSIS command:"
               Write-Host $command
-
 
               $process = Start-Process `
                 -FilePath 'cmd.exe' `
@@ -536,17 +564,14 @@ runs:
                 -PassThru `
                 -NoNewWindow
 
-
               if (
                 $process.ExitCode -eq 0 -or
                 $process.ExitCode -eq 3010
               ) {
-
                 Write-Host "[REMOVED] $name"
                 $removed++
               }
               else {
-
                 Write-Warning `
                   "[FAILED] $name - exit code $($process.ExitCode)"
 
@@ -558,7 +583,7 @@ runs:
 
 
             # ====================================================
-            # OTHER EXE UNINSTALLERS
+            # UNKNOWN EXE
             # ====================================================
 
             if ($uninstall -match '(?i)\.exe') {
@@ -611,12 +636,12 @@ runs:
 
 
     # ============================================================
-    # CLEAN LEFTOVER KNOWN SERVICES
+    # REMOVE LEFTOVER UNWANTED SERVICES
     # ============================================================
 
     - name: Remove leftover unwanted services
       if: ${{ inputs.enable == 'true' && inputs.remove_services == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -658,49 +683,12 @@ runs:
 
 
     # ============================================================
-    # SECOND PASS FOR COMMON LEFTOVER DIRECTORIES
-    # ============================================================
-
-    - name: Remove known tool directories
-      if: ${{ inputs.enable == 'true' }}
-      shell: powershell
-      run: |
-        $ErrorActionPreference = 'Continue'
-
-        $paths = @(
-          'C:\hostedtoolcache'
-        )
-
-        foreach ($path in $paths) {
-
-          if (-not (Test-Path -LiteralPath $path)) {
-            continue
-          }
-
-          Write-Host "[REMOVE] $path"
-
-          try {
-            Remove-Item `
-              -LiteralPath $path `
-              -Recurse `
-              -Force `
-              -ErrorAction Stop
-
-            Write-Host "[REMOVED] $path"
-          }
-          catch {
-            Write-Warning "Could not completely remove $path"
-          }
-        }
-
-
-    # ============================================================
     # FINAL VERIFICATION
     # ============================================================
 
     - name: Verify preserved software
       if: ${{ inputs.enable == 'true' }}
-      shell: powershell
+      shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
 
@@ -798,6 +786,42 @@ runs:
         $apps |
           Where-Object {
             $_.DisplayName -match '(?i)^Docker'
+          } |
+          ForEach-Object {
+            Write-Host "  $($_.DisplayName)"
+          }
+
+
+        Write-Host ""
+        Write-Host "[WSL / Kubernetes]"
+
+        $apps |
+          Where-Object {
+            $_.DisplayName -match '(?i)(Windows Subsystem for Linux|^WSL|Ubuntu|Debian|Kali Linux|Kubernetes|kubectl|Minikube|kind)'
+          } |
+          ForEach-Object {
+            Write-Host "  $($_.DisplayName)"
+          }
+
+
+        Write-Host ""
+        Write-Host "[Node.js]"
+
+        $apps |
+          Where-Object {
+            $_.DisplayName -match '(?i)(^Node\.js|^NodeJS|^npm|^npx)'
+          } |
+          ForEach-Object {
+            Write-Host "  $($_.DisplayName)"
+          }
+
+
+        Write-Host ""
+        Write-Host "[PowerShell]"
+
+        $apps |
+          Where-Object {
+            $_.DisplayName -match '(?i)^PowerShell'
           } |
           ForEach-Object {
             Write-Host "  $($_.DisplayName)"
