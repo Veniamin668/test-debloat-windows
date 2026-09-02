@@ -1,5 +1,5 @@
 name: Windows Debloat & Cleanup
-description: Removes unwanted third-party software while preserving Firefox, Visual Studio, Git and GitHub CLI
+description: Aggressive Windows runner cleanup with Firefox, Visual Studio, Git, GitHub CLI, Tailscale and Docker preserved
 author: Windows Debloat & Cleanup
 
 inputs:
@@ -9,7 +9,7 @@ inputs:
     default: 'true'
 
   remove_services:
-    description: Stop and remove known third-party services
+    description: Stop and remove unwanted third-party services
     required: false
     default: 'true'
 
@@ -17,7 +17,11 @@ runs:
   using: composite
   steps:
 
-    - name: Stop conflicting services
+    # ============================================================
+    # STOP KNOWN UNWANTED SERVICES
+    # ============================================================
+
+    - name: Stop unwanted services
       if: ${{ inputs.enable == 'true' && inputs.remove_services == 'true' }}
       shell: powershell
       run: |
@@ -25,6 +29,7 @@ runs:
 
         $services = @(
           'postgresql-x64-17',
+          'PostgreSQL',
           'MongoDB',
           'Apache',
           'nginx',
@@ -34,9 +39,6 @@ runs:
           'SQLTELEMETRY',
           'SQLAgent$SQLEXPRESS',
           'MsDtsServer',
-          'FabricHostSvc',
-          'WSAIFabricSvc',
-          'HgClientService',
           'hpatchmon',
           'ZTHELPER'
         )
@@ -51,12 +53,17 @@ runs:
               Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
             }
             catch {
-              Write-Warning "Failed to stop service: $name"
+              Write-Warning "Failed to stop $name"
             }
           }
         }
 
-    - name: Stop third-party processes
+
+    # ============================================================
+    # STOP UNWANTED PROCESSES
+    # ============================================================
+
+    - name: Stop unwanted processes
       if: ${{ inputs.enable == 'true' }}
       shell: powershell
       run: |
@@ -69,17 +76,112 @@ runs:
           'mongo',
           'httpd',
           'nginx',
-          'docker',
           'mysqld',
           'mysql',
           'w3wp',
-          'sbt'
+          'node',
+          'npm',
+          'npx',
+          'sbt',
+          'java',
+          'javaw',
+          'python',
+          'python3',
+          'conda',
+          'ruby',
+          'perl',
+          'dotnet',
+          'msbuild'
         )
 
         foreach ($name in $processes) {
           Get-Process -Name $name -ErrorAction SilentlyContinue |
             Stop-Process -Force -ErrorAction SilentlyContinue
         }
+
+
+    # ============================================================
+    # REMOVE HOSTED TOOL CACHE
+    # ============================================================
+
+    - name: Remove hosted tool cache
+      if: ${{ inputs.enable == 'true' }}
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Continue'
+
+        $path = 'C:\hostedtoolcache'
+
+        if (Test-Path -LiteralPath $path) {
+          Write-Host "[REMOVE] $path"
+
+          try {
+            Remove-Item `
+              -LiteralPath $path `
+              -Recurse `
+              -Force `
+              -ErrorAction Stop
+
+            Write-Host "[REMOVED] $path"
+          }
+          catch {
+            Write-Warning "Failed to completely remove $path"
+            Write-Warning $_
+          }
+        }
+        else {
+          Write-Host "[NOT FOUND] $path"
+        }
+
+
+    # ============================================================
+    # REMOVE ANDROID DIRECTORY FROM PROGRAM FILES (X86)
+    # ============================================================
+
+    - name: Remove Android directory
+      if: ${{ inputs.enable == 'true' }}
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Continue'
+
+        $base = 'C:\Program Files (x86)'
+
+        if (-not (Test-Path -LiteralPath $base)) {
+          Write-Host "[NOT FOUND] $base"
+          exit 0
+        }
+
+        $androidDirs = Get-ChildItem `
+          -LiteralPath $base `
+          -Directory `
+          -Force `
+          -ErrorAction SilentlyContinue |
+          Where-Object {
+            $_.Name -match '(?i)^Android$'
+          }
+
+        foreach ($dir in $androidDirs) {
+          Write-Host "[REMOVE] $($dir.FullName)"
+
+          try {
+            Remove-Item `
+              -LiteralPath $dir.FullName `
+              -Recurse `
+              -Force `
+              -ErrorAction Stop
+
+            Write-Host "[REMOVED] $($dir.FullName)"
+          }
+          catch {
+            Write-Warning "Failed to remove $($dir.FullName)"
+            Write-Warning $_
+          }
+        }
+
+
+    # ============================================================
+    # DISCOVER INSTALLED SOFTWARE
+    # ============================================================
 
     - name: Discover installed software
       if: ${{ inputs.enable == 'true' }}
@@ -98,7 +200,9 @@ runs:
 
         foreach ($path in $registryPaths) {
           try {
-            $apps += Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+            $apps += Get-ItemProperty `
+              -Path $path `
+              -ErrorAction SilentlyContinue
           }
           catch {
           }
@@ -111,29 +215,55 @@ runs:
           Sort-Object DisplayName, PSPath -Unique
 
         Write-Host ""
-        Write-Host "=============================================="
-        Write-Host "Installed applications: $($apps.Count)"
-        Write-Host "=============================================="
+        Write-Host "============================================================"
+        Write-Host "INSTALLED SOFTWARE"
+        Write-Host "============================================================"
 
         foreach ($app in $apps) {
           Write-Host $app.DisplayName
         }
 
         Write-Host ""
+        Write-Host "Total: $($apps.Count)"
 
-    - name: Remove unwanted software
+
+    # ============================================================
+    # AGGRESSIVE ALLOWLIST CLEANUP
+    #
+    # KEEP:
+    #   Firefox
+    #   Visual Studio
+    #   Git
+    #   GitHub CLI
+    #   Tailscale
+    #   Docker
+    #
+    # REMOVE:
+    #   Everything else with a registered uninstaller
+    # ============================================================
+
+    - name: Remove everything except allowlist
       if: ${{ inputs.enable == 'true' }}
       shell: powershell
       run: |
         $ErrorActionPreference = 'Continue'
 
         # ========================================================
-        # SOFTWARE THAT MUST BE PRESERVED
+        # ALLOWLIST
         # ========================================================
 
         $allowPatterns = @(
+
+          # ------------------------------------------------------
+          # FIREFOX
+          # ------------------------------------------------------
+
           '(?i)\bMozilla Firefox\b',
           '(?i)^Firefox\b',
+
+          # ------------------------------------------------------
+          # VISUAL STUDIO
+          # ------------------------------------------------------
 
           '(?i)\bMicrosoft Visual Studio\b',
           '(?i)^Visual Studio\b',
@@ -141,90 +271,54 @@ runs:
           '(?i)^Visual Studio Installer\b',
           '(?i)^VS Installer\b',
 
-          '(?i)^Tailscale\b',
-          '(?i)^Tailscale Inc\b',
-          # Visual Studio internal components
+          # Visual Studio internal packages / MSI names
           '(?i)^vs_',
           '(?i)^sptools_Microsoft\.VisualStudio',
           '(?i)^Microsoft Visual Studio Setup',
 
-          # Git
+          # ------------------------------------------------------
+          # GIT
+          # ------------------------------------------------------
+
           '(?i)^Git$',
           '(?i)^Git for Windows\b',
           '(?i)^Git Credential Manager',
 
-          # GitHub CLI
+          # ------------------------------------------------------
+          # GITHUB CLI
+          # ------------------------------------------------------
+
           '(?i)^GitHub CLI$',
-          '(?i)^GitHub Command Line Interface\b'
+          '(?i)^GitHub Command Line Interface\b',
+
+          # ------------------------------------------------------
+          # TAILSCALE
+          # ------------------------------------------------------
+
+          '(?i)^Tailscale\b',
+          '(?i)^Tailscale VPN\b',
+
+          # ------------------------------------------------------
+          # DOCKER
+          # ------------------------------------------------------
+
+          '(?i)^Docker\b',
+          '(?i)^Docker Desktop\b',
+          '(?i)^Docker Engine\b',
+          '(?i)^Docker Compose\b',
+          '(?i)^Docker CLI\b',
+          '(?i)^Docker CE\b',
+          '(?i)^Docker Inc\.',
+          '(?i)^Docker Desktop Installer\b'
         )
 
-        # ========================================================
-        # WINDOWS COMPONENTS THAT MUST NOT BE REMOVED
-        # ========================================================
 
-        $systemPatterns = @(
-          '(?i)^Microsoft Windows',
-          '(?i)^Microsoft\.Windows',
-          '(?i)^MicrosoftWindows\.',
-          '(?i)^Windows\.',
-          '(?i)^Windows ',
-
-          '(?i)^Microsoft Edge',
-          '(?i)^Microsoft Edge WebView',
-          '(?i)^Microsoft WebView',
-
-          '(?i)^Microsoft\.DesktopAppInstaller',
-
-          '(?i)^Microsoft \.NET Framework',
-          '(?i)^Microsoft \.NET Runtime',
-          '(?i)^Microsoft \.NET Host',
-          '(?i)^Microsoft \.NET SDK',
-          '(?i)^Microsoft \.NET Targeting Pack',
-          '(?i)^Microsoft\.NETCore',
-          '(?i)^Microsoft\.NET',
-          '(?i)^Microsoft ASP\.NET Core',
-          '(?i)^Microsoft ASP\.NET',
-
-          '(?i)^Microsoft \.NET Native',
-          '(?i)^Microsoft\.VCLibs',
-
-          '(?i)^Microsoft Visual C\+\+.*Runtime',
-          '(?i)^Microsoft Visual C\+\+.*Redistributable',
-          '(?i)^Visual C\+\+ Library CRT',
-
-          '(?i)^Universal CRT',
-
-          '(?i)^Windows SDK',
-          '(?i)^Microsoft SDK',
-
-          '(?i)^WinRT',
-
-          '(?i)^Microsoft Windows App Runtime',
-          '(?i)^Microsoft\.WindowsAppRuntime',
-
-          '(?i)^Microsoft\.SecHealthUI',
-          '(?i)^Microsoft\.AAD\.',
-          '(?i)^Microsoft\.AccountsControl',
-          '(?i)^Microsoft\.BioEnrollment',
-          '(?i)^Microsoft\.CredDialogHost',
-          '(?i)^Microsoft\.LockApp',
-          '(?i)^Microsoft\.Shell',
-          '(?i)^Microsoft\.UI\.Xaml',
-          '(?i)^Microsoft\.Win32WebViewHost',
-
-          '(?i)^PowerShell\b',
-
-          '(?i)^GitHub Actions',
-          '(?i)^Runner'
-        )
-
-        function Test-MatchAny {
+        function Test-Allowlist {
           param(
-            [string]$Name,
-            [string[]]$Patterns
+            [string]$Name
           )
 
-          foreach ($pattern in $Patterns) {
+          foreach ($pattern in $allowPatterns) {
             if ($Name -match $pattern) {
               return $true
             }
@@ -232,6 +326,11 @@ runs:
 
           return $false
         }
+
+
+        # ========================================================
+        # GET INSTALLED SOFTWARE
+        # ========================================================
 
         $registryPaths = @(
           'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -244,7 +343,9 @@ runs:
 
         foreach ($path in $registryPaths) {
           try {
-            $apps += Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+            $apps += Get-ItemProperty `
+              -Path $path `
+              -ErrorAction SilentlyContinue
           }
           catch {
           }
@@ -256,34 +357,31 @@ runs:
           } |
           Sort-Object DisplayName, PSPath -Unique
 
+
         $removed = 0
         $kept = 0
         $failed = 0
         $skipped = 0
+
+
+        # ========================================================
+        # PROCESS EACH APPLICATION
+        # ========================================================
 
         foreach ($app in $apps) {
 
           $name = $app.DisplayName
 
           # ------------------------------------------------------
-          # KEEP ALLOWED SOFTWARE
+          # KEEP ALLOWLISTED SOFTWARE
           # ------------------------------------------------------
 
-          if (Test-MatchAny -Name $name -Patterns $allowPatterns) {
+          if (Test-Allowlist -Name $name) {
             Write-Host "[KEEP] $name"
             $kept++
             continue
           }
 
-          # ------------------------------------------------------
-          # KEEP WINDOWS COMPONENTS
-          # ------------------------------------------------------
-
-          if (Test-MatchAny -Name $name -Patterns $systemPatterns) {
-            Write-Host "[SYSTEM] $name"
-            $kept++
-            continue
-          }
 
           # ------------------------------------------------------
           # FIND UNINSTALL COMMAND
@@ -295,16 +393,19 @@ runs:
             $uninstall = $app.UninstallString
           }
 
+
           if ([string]::IsNullOrWhiteSpace($uninstall)) {
             Write-Host "[NO UNINSTALLER] $name"
             $skipped++
             continue
           }
 
+
           Write-Host ""
-          Write-Host "=============================================="
+          Write-Host "============================================================"
           Write-Host "[REMOVE] $name"
-          Write-Host "=============================================="
+          Write-Host "============================================================"
+
 
           try {
 
@@ -316,15 +417,24 @@ runs:
 
               $command = $uninstall
 
-              $command = $command -replace '(?i)\s+/I(?=\s|{)', ' /X'
-              $command = $command -replace '(?i)\s+/i(?=\s|{)', ' /X'
+              # Convert installation operation to uninstall.
+              $command = $command -replace `
+                '(?i)\s+/I(?=\s|{)', `
+                ' /X'
+
+              $command = $command -replace `
+                '(?i)\s+/i(?=\s|{)', `
+                ' /X'
+
 
               if ($command -notmatch '(?i)\s/(quiet|qn)\b') {
                 $command += ' /quiet /norestart'
               }
 
-              Write-Host "MSI:"
+
+              Write-Host "MSI command:"
               Write-Host $command
+
 
               $process = Start-Process `
                 -FilePath 'cmd.exe' `
@@ -333,22 +443,28 @@ runs:
                 -PassThru `
                 -NoNewWindow
 
+
               if (
                 $process.ExitCode -eq 0 -or
                 $process.ExitCode -eq 1605 -or
                 $process.ExitCode -eq 1614 -or
                 $process.ExitCode -eq 3010
               ) {
+
                 Write-Host "[REMOVED] $name"
                 $removed++
               }
               else {
-                Write-Warning "[FAILED] $name - exit code $($process.ExitCode)"
+
+                Write-Warning `
+                  "[FAILED] $name - MSI exit code $($process.ExitCode)"
+
                 $failed++
               }
 
               continue
             }
+
 
             # ====================================================
             # INNO SETUP
@@ -356,31 +472,45 @@ runs:
 
             if ($uninstall -match '(?i)unins\d*\.exe') {
 
-              if ($uninstall -notmatch '(?i)/VERYSILENT') {
-                $uninstall += ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+              $command = $uninstall
+
+              if ($command -notmatch '(?i)/VERYSILENT') {
+                $command += `
+                  ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
               }
+
+
+              Write-Host "Inno Setup command:"
+              Write-Host $command
+
 
               $process = Start-Process `
                 -FilePath 'cmd.exe' `
-                -ArgumentList "/c $uninstall" `
+                -ArgumentList "/c $command" `
                 -Wait `
                 -PassThru `
                 -NoNewWindow
+
 
               if (
                 $process.ExitCode -eq 0 -or
                 $process.ExitCode -eq 3010
               ) {
+
                 Write-Host "[REMOVED] $name"
                 $removed++
               }
               else {
-                Write-Warning "[FAILED] $name - exit code $($process.ExitCode)"
+
+                Write-Warning `
+                  "[FAILED] $name - exit code $($process.ExitCode)"
+
                 $failed++
               }
 
               continue
             }
+
 
             # ====================================================
             # NSIS
@@ -388,58 +518,103 @@ runs:
 
             if ($uninstall -match '(?i)uninstall\.exe') {
 
-              if ($uninstall -notmatch '(?i)\s/S\b') {
-                $uninstall += ' /S'
+              $command = $uninstall
+
+              if ($command -notmatch '(?i)\s/S\b') {
+                $command += ' /S'
               }
+
+
+              Write-Host "NSIS command:"
+              Write-Host $command
+
 
               $process = Start-Process `
                 -FilePath 'cmd.exe' `
-                -ArgumentList "/c $uninstall" `
+                -ArgumentList "/c $command" `
                 -Wait `
                 -PassThru `
                 -NoNewWindow
+
 
               if (
                 $process.ExitCode -eq 0 -or
                 $process.ExitCode -eq 3010
               ) {
+
                 Write-Host "[REMOVED] $name"
                 $removed++
               }
               else {
-                Write-Warning "[FAILED] $name - exit code $($process.ExitCode)"
+
+                Write-Warning `
+                  "[FAILED] $name - exit code $($process.ExitCode)"
+
                 $failed++
               }
 
               continue
             }
 
+
             # ====================================================
-            # UNKNOWN EXE
+            # OTHER EXE UNINSTALLERS
             # ====================================================
 
-            Write-Warning "[SKIP] Unknown uninstaller: $name"
+            if ($uninstall -match '(?i)\.exe') {
+
+              Write-Warning `
+                "[SKIP] Unknown EXE uninstaller: $name"
+
+              Write-Warning `
+                "Command: $uninstall"
+
+              $skipped++
+              continue
+            }
+
+
+            # ====================================================
+            # UNKNOWN
+            # ====================================================
+
+            Write-Warning `
+              "[SKIP] Unsupported uninstaller: $name"
+
             $skipped++
+
           }
           catch {
+
             Write-Warning "[ERROR] $name"
             Write-Warning $_
+
             $failed++
           }
         }
 
+
+        # ========================================================
+        # SUMMARY
+        # ========================================================
+
         Write-Host ""
-        Write-Host "=============================================="
-        Write-Host "CLEANUP SUMMARY"
-        Write-Host "=============================================="
+        Write-Host ""
+        Write-Host "============================================================"
+        Write-Host "DEBLOAT SUMMARY"
+        Write-Host "============================================================"
         Write-Host "Removed : $removed"
         Write-Host "Kept    : $kept"
         Write-Host "Skipped : $skipped"
         Write-Host "Failed  : $failed"
-        Write-Host "=============================================="
+        Write-Host "============================================================"
 
 
-    - name: Remove leftover third-party services
+    # ============================================================
+    # CLEAN LEFTOVER KNOWN SERVICES
+    # ============================================================
+
+    - name: Remove leftover unwanted services
       if: ${{ inputs.enable == 'true' && inputs.remove_services == 'true' }}
       shell: powershell
       run: |
@@ -447,6 +622,7 @@ runs:
 
         $services = @(
           'postgresql-x64-17',
+          'PostgreSQL',
           'MongoDB',
           'Apache',
           'nginx',
@@ -456,16 +632,15 @@ runs:
           'SQLTELEMETRY',
           'SQLAgent$SQLEXPRESS',
           'MsDtsServer',
-          'FabricHostSvc',
-          'WSAIFabricSvc',
-          'HgClientService',
           'hpatchmon',
           'ZTHELPER'
         )
 
         foreach ($name in $services) {
 
-          $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+          $service = Get-Service `
+            -Name $name `
+            -ErrorAction SilentlyContinue
 
           if ($null -eq $service) {
             continue
@@ -481,6 +656,47 @@ runs:
           }
         }
 
+
+    # ============================================================
+    # SECOND PASS FOR COMMON LEFTOVER DIRECTORIES
+    # ============================================================
+
+    - name: Remove known tool directories
+      if: ${{ inputs.enable == 'true' }}
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Continue'
+
+        $paths = @(
+          'C:\hostedtoolcache'
+        )
+
+        foreach ($path in $paths) {
+
+          if (-not (Test-Path -LiteralPath $path)) {
+            continue
+          }
+
+          Write-Host "[REMOVE] $path"
+
+          try {
+            Remove-Item `
+              -LiteralPath $path `
+              -Recurse `
+              -Force `
+              -ErrorAction Stop
+
+            Write-Host "[REMOVED] $path"
+          }
+          catch {
+            Write-Warning "Could not completely remove $path"
+          }
+        }
+
+
+    # ============================================================
+    # FINAL VERIFICATION
+    # ============================================================
 
     - name: Verify preserved software
       if: ${{ inputs.enable == 'true' }}
@@ -498,7 +714,9 @@ runs:
         $apps = @()
 
         foreach ($path in $registryPaths) {
-          $apps += Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+          $apps += Get-ItemProperty `
+            -Path $path `
+            -ErrorAction SilentlyContinue
         }
 
         $apps = $apps |
@@ -507,13 +725,16 @@ runs:
           } |
           Sort-Object DisplayName -Unique
 
-        Write-Host ""
-        Write-Host "=============================================="
-        Write-Host "PRESERVED SOFTWARE"
-        Write-Host "=============================================="
 
         Write-Host ""
-        Write-Host "Firefox:"
+        Write-Host "============================================================"
+        Write-Host "PRESERVED SOFTWARE"
+        Write-Host "============================================================"
+
+
+        Write-Host ""
+        Write-Host "[Firefox]"
+
         $apps |
           Where-Object {
             $_.DisplayName -match '(?i)Firefox'
@@ -522,8 +743,10 @@ runs:
             Write-Host "  $($_.DisplayName)"
           }
 
+
         Write-Host ""
-        Write-Host "Visual Studio:"
+        Write-Host "[Visual Studio]"
+
         $apps |
           Where-Object {
             $_.DisplayName -match '(?i)(Visual Studio|^vs_|sptools_Microsoft\.VisualStudio)'
@@ -532,8 +755,10 @@ runs:
             Write-Host "  $($_.DisplayName)"
           }
 
+
         Write-Host ""
-        Write-Host "Git:"
+        Write-Host "[Git]"
+
         $apps |
           Where-Object {
             $_.DisplayName -match '(?i)^Git($| for Windows| Credential Manager)'
@@ -542,8 +767,10 @@ runs:
             Write-Host "  $($_.DisplayName)"
           }
 
+
         Write-Host ""
-        Write-Host "GitHub CLI:"
+        Write-Host "[GitHub CLI]"
+
         $apps |
           Where-Object {
             $_.DisplayName -match '(?i)^GitHub CLI$'
@@ -552,5 +779,32 @@ runs:
             Write-Host "  $($_.DisplayName)"
           }
 
+
         Write-Host ""
-        Write-Host "Cleanup completed."
+        Write-Host "[Tailscale]"
+
+        $apps |
+          Where-Object {
+            $_.DisplayName -match '(?i)Tailscale'
+          } |
+          ForEach-Object {
+            Write-Host "  $($_.DisplayName)"
+          }
+
+
+        Write-Host ""
+        Write-Host "[Docker]"
+
+        $apps |
+          Where-Object {
+            $_.DisplayName -match '(?i)^Docker'
+          } |
+          ForEach-Object {
+            Write-Host "  $($_.DisplayName)"
+          }
+
+
+        Write-Host ""
+        Write-Host "============================================================"
+        Write-Host "WINDOWS DEBLOAT COMPLETED"
+        Write-Host "============================================================"
