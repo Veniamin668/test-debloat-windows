@@ -40,7 +40,8 @@ Examples:
 - Xamarin
 - MAUI
 - other unnecessary preinstalled software
-P.S. Some software may still remain. I don't know why some applications fail to uninstall, but I'll try to fix this in the future.
+
+#P.S. Some software may still remain. I don't know why some applications fail to uninstall, but I'll try to fix this in the future.
 
 The action also removes:
 
