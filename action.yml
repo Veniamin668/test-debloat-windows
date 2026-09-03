@@ -2,6 +2,10 @@ name: Windows Debloat & Cleanup
 description: Aggressive Windows runner cleanup with selected development tools preserved
 author: Windows Debloat & Cleanup
 
+branding:
+  icon: trash-2
+  color: red
+  
 inputs:
   enable:
     description: Enable cleanup
