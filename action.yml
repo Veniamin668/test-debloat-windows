@@ -253,7 +253,7 @@ runs:
 
 
     # ============================================================
-    # UNIVERSAL ALLOWLIST CLEANUP
+    # ALLOWLIST CLEANUP
     # ============================================================
 
     - name: Remove everything except allowlist
@@ -273,8 +273,8 @@ runs:
           # FIREFOX
           # ------------------------------------------------------
 
-          '(?i)\bMozilla Firefox\b',
-          '(?i)^Firefox\b'
+          '(?i)\bMozilla Firefox\b'
+          ,'(?i)^Firefox\b'
 
 
           # ------------------------------------------------------
@@ -284,6 +284,15 @@ runs:
           ,'(?i)^7-Zip\b'
           ,'(?i)^7-Zip [0-9]'
           ,'(?i)^7-Zip Extra\b'
+
+
+          # ------------------------------------------------------
+          # CMAKE
+          # ------------------------------------------------------
+
+          ,'(?i)^CMake\b'
+          ,'(?i)^CMake [0-9]'
+          ,'(?i)^CMake Tools\b'
 
 
           # ------------------------------------------------------
@@ -347,9 +356,6 @@ runs:
           ,'(?i)^WSL\b'
           ,'(?i)^Windows Subsystem for Linux Update\b'
 
-
-          # WSL distributions
-
           ,'(?i)^Ubuntu\b'
           ,'(?i)^Debian\b'
           ,'(?i)^Kali Linux\b'
@@ -381,7 +387,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # POWERSHELL 7
+          # POWERSHELL
           # ------------------------------------------------------
 
           ,'(?i)^PowerShell 7\b'
@@ -456,7 +462,7 @@ runs:
 
 
         # ========================================================
-        # HELPER: CHECK REGISTRY ENTRY
+        # CHECK REGISTRY ENTRY
         # ========================================================
 
         function Test-AppStillInstalled {
@@ -484,14 +490,14 @@ runs:
 
 
         # ========================================================
-        # HELPER: WAIT FOR UNINSTALL
+        # WAIT FOR REMOVAL
         # ========================================================
 
         function Wait-AppRemoval {
 
           param(
             $App,
-            [int]$Seconds = 15
+            [int]$Seconds = 20
           )
 
           for ($i = 0; $i -lt $Seconds; $i++) {
@@ -508,7 +514,168 @@ runs:
 
 
         # ========================================================
-        # HELPER: RUN COMMAND
+        # PARSE EXECUTABLE COMMAND
+        #
+        # Converts:
+        #
+        # "C:\Program Files\App\unins000.exe" /SILENT
+        #
+        # into:
+        #
+        # FilePath  = C:\Program Files\App\unins000.exe
+        # Arguments = /SILENT
+        # ========================================================
+
+        function Split-ExecutableCommand {
+
+          param(
+            [string]$Command
+          )
+
+          $Command = $Command.Trim()
+
+          if ($Command -match '^\s*"([^"]+)"\s*(.*)$') {
+
+            return @{
+              FilePath  = $Matches[1]
+              Arguments = $Matches[2]
+            }
+          }
+
+          if ($Command -match '^\s*(\S+)\s*(.*)$') {
+
+            return @{
+              FilePath  = $Matches[1]
+              Arguments = $Matches[2]
+            }
+          }
+
+          return $null
+        }
+
+
+        # ========================================================
+        # RUN EXE UNINSTALLER
+        # ========================================================
+
+        function Invoke-ExeUninstaller {
+
+          param(
+            [string]$Command,
+            [string]$DisplayName
+          )
+
+          $parsed = Split-ExecutableCommand -Command $Command
+
+          if ($null -eq $parsed) {
+
+            Write-Warning `
+              "Could not parse uninstall command for $DisplayName"
+
+            return $null
+          }
+
+          $exe = $parsed.FilePath
+          $args = $parsed.Arguments
+
+          Write-Host "[EXE] $exe"
+
+          if (-not [string]::IsNullOrWhiteSpace($args)) {
+            Write-Host "[ARGS] $args"
+          }
+
+          if (-not (Test-Path -LiteralPath $exe)) {
+
+            Write-Warning `
+              "Uninstaller executable not found: $exe"
+
+            return $null
+          }
+
+          try {
+
+            if ([string]::IsNullOrWhiteSpace($args)) {
+
+              $process = Start-Process `
+                -FilePath $exe `
+                -Wait `
+                -PassThru `
+                -NoNewWindow
+
+            }
+            else {
+
+              $process = Start-Process `
+                -FilePath $exe `
+                -ArgumentList $args `
+                -Wait `
+                -PassThru `
+                -NoNewWindow
+            }
+
+            Write-Host "[EXIT CODE] $($process.ExitCode)"
+
+            return $process.ExitCode
+
+          }
+          catch {
+
+            Write-Warning `
+              "Failed to execute EXE uninstaller for $DisplayName"
+
+            Write-Warning $_
+
+            return $null
+          }
+        }
+
+
+        # ========================================================
+        # RUN BATCH UNINSTALLER
+        # ========================================================
+
+        function Invoke-BatchUninstaller {
+
+          param(
+            [string]$Command,
+            [string]$DisplayName
+          )
+
+          Write-Host "[BATCH] $Command"
+
+          try {
+
+            $process = Start-Process `
+              -FilePath 'cmd.exe' `
+              -ArgumentList @(
+                '/d'
+                '/s'
+                '/c'
+                "call $Command"
+              ) `
+              -Wait `
+              -PassThru `
+              -NoNewWindow
+
+            Write-Host "[EXIT CODE] $($process.ExitCode)"
+
+            return $process.ExitCode
+
+          }
+          catch {
+
+            Write-Warning `
+              "Failed to execute batch uninstaller for $DisplayName"
+
+            Write-Warning $_
+
+            return $null
+          }
+        }
+
+
+        # ========================================================
+        # RUN GENERIC UNINSTALL COMMAND
         # ========================================================
 
         function Invoke-UninstallCommand {
@@ -522,13 +689,51 @@ runs:
             return $null
           }
 
-          Write-Host "[COMMAND] $Command"
+
+          # ------------------------------------------------------
+          # BAT / CMD
+          # ------------------------------------------------------
+
+          if (
+            $Command -match '(?i)\.(bat|cmd)(?:["\s]|$)'
+          ) {
+
+            return Invoke-BatchUninstaller `
+              -Command $Command `
+              -DisplayName $DisplayName
+          }
+
+
+          # ------------------------------------------------------
+          # EXE
+          # ------------------------------------------------------
+
+          if (
+            $Command -match '(?i)\.exe(?:["\s]|$)'
+          ) {
+
+            return Invoke-ExeUninstaller `
+              -Command $Command `
+              -DisplayName $DisplayName
+          }
+
+
+          # ------------------------------------------------------
+          # FALLBACK TO CMD
+          # ------------------------------------------------------
+
+          Write-Host "[CMD] $Command"
 
           try {
 
             $process = Start-Process `
               -FilePath 'cmd.exe' `
-              -ArgumentList '/d', '/s', '/c', $Command `
+              -ArgumentList @(
+                '/d'
+                '/s'
+                '/c'
+                $Command
+              ) `
               -Wait `
               -PassThru `
               -NoNewWindow
@@ -540,7 +745,9 @@ runs:
           }
           catch {
 
-            Write-Warning "Failed to execute uninstaller for $DisplayName"
+            Write-Warning `
+              "Failed to execute uninstall command for $DisplayName"
+
             Write-Warning $_
 
             return $null
@@ -549,7 +756,7 @@ runs:
 
 
         # ========================================================
-        # HELPER: BUILD UNIVERSAL COMMAND
+        # BUILD UNIVERSAL UNINSTALL COMMAND
         # ========================================================
 
         function Get-UniversalUninstallCommand {
@@ -560,11 +767,16 @@ runs:
 
           $name = [string]$App.DisplayName
 
+
           # ------------------------------------------------------
-          # QuietUninstallString has highest priority
+          # QUIET UNINSTALL STRING
           # ------------------------------------------------------
 
-          if (-not [string]::IsNullOrWhiteSpace($App.QuietUninstallString)) {
+          if (
+            -not [string]::IsNullOrWhiteSpace(
+              $App.QuietUninstallString
+            )
+          ) {
 
             Write-Host "[TYPE] QuietUninstallString"
 
@@ -581,7 +793,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # EDGE / WEBVIEW2
+          # MICROSOFT EDGE / WEBVIEW2
           # ------------------------------------------------------
 
           if (
@@ -615,7 +827,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # ANACONDA
+          # ANACONDA / MINICONDA
           # ------------------------------------------------------
 
           if (
@@ -628,7 +840,10 @@ runs:
 
               Write-Host "[TYPE] Anaconda/Miniconda"
 
-              if ($command -notmatch '(?i)\s/(S|silent|verysilent)\b') {
+              if (
+                $command -notmatch '(?i)\s/(S|silent|verysilent)\b'
+              ) {
+
                 $command += ' /S'
               }
 
@@ -646,7 +861,7 @@ runs:
           ) {
 
             if (
-              $command -match '(?i)(uninstall.*\.exe|uninstaller\.exe)'
+              $command -match '(?i)(uninstall.*\.exe|uninstaller\.exe|unins\d*\.exe)'
             ) {
 
               Write-Host "[TYPE] PostgreSQL"
@@ -654,6 +869,7 @@ runs:
               if (
                 $command -notmatch '(?i)(--mode|/quiet|/silent|/verysilent)'
               ) {
+
                 $command += ' --mode unattended'
               }
 
@@ -663,7 +879,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # AZURE SERVICE FABRIC / CUSTOM BATCH UNINSTALLERS
+          # AZURE SERVICE FABRIC
           # ------------------------------------------------------
 
           if (
@@ -682,7 +898,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # BAT / CMD
+          # GENERIC BAT / CMD
           # ------------------------------------------------------
 
           if (
@@ -716,6 +932,7 @@ runs:
             if (
               $command -notmatch '(?i)\s/(quiet|qn)\b'
             ) {
+
               $command += ' /quiet /norestart'
             }
 
@@ -734,7 +951,7 @@ runs:
             Write-Host "[TYPE] Inno Setup"
 
             if (
-              $command -notmatch '(?i)/VERYSILENT'
+              $command -notmatch '(?i)/(VERYSILENT|SILENT)'
             ) {
 
               $command += `
@@ -768,10 +985,6 @@ runs:
 
           # ------------------------------------------------------
           # GENERIC EXE
-          #
-          # IMPORTANT:
-          # Do not blindly add arbitrary silent parameters.
-          # Use the vendor's original uninstall command.
           # ------------------------------------------------------
 
           if (
@@ -785,7 +998,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # FALLBACK
+          # GENERIC COMMAND
           # ------------------------------------------------------
 
           Write-Host "[TYPE] Generic uninstall command"
@@ -818,7 +1031,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # FIND UNINSTALL COMMAND
+          # GET UNINSTALL COMMAND
           # ------------------------------------------------------
 
           $uninstallCommand =
@@ -854,7 +1067,7 @@ runs:
 
 
           # ------------------------------------------------------
-          # ACCEPT COMMON SUCCESS CODES
+          # COMMON SUCCESS CODES
           # ------------------------------------------------------
 
           $successCode = (
@@ -880,15 +1093,16 @@ runs:
 
 
           # ------------------------------------------------------
-          # WAIT FOR REGISTRY ENTRY TO DISAPPEAR
+          # WAIT FOR REGISTRY ENTRY
           # ------------------------------------------------------
 
-          Write-Host "[CHECK] Waiting for uninstall registration to disappear..."
+          Write-Host `
+            "[CHECK] Waiting for uninstall registration to disappear..."
 
           $gone =
             Wait-AppRemoval `
               -App $app `
-              -Seconds 15
+              -Seconds 20
 
 
           if ($gone) {
@@ -896,27 +1110,24 @@ runs:
             Write-Host "[REMOVED] $name"
 
             $removed++
+
+          }
+          elseif ($successCode) {
+
+            Write-Host `
+              "[UNINSTALLER FINISHED] $name"
+
+            Write-Warning `
+              "[REGISTRY ENTRY STILL PRESENT] $name"
+
+            $skipped++
+
           }
           else {
 
-            if ($successCode) {
+            Write-Warning "[FAILED] $name"
 
-              Write-Host `
-                "[UNINSTALLER FINISHED] $name"
-
-              Write-Warning `
-                "[REGISTRY ENTRY STILL PRESENT] $name"
-
-              $skipped++
-
-            }
-            else {
-
-              Write-Warning `
-                "[FAILED] $name"
-
-              $failed++
-            }
+            $failed++
           }
         }
 
@@ -1045,6 +1256,18 @@ runs:
         $apps |
           Where-Object {
             $_.DisplayName -match '(?i)^7-Zip\b'
+          } |
+          ForEach-Object {
+            Write-Host "  $($_.DisplayName)"
+          }
+
+
+        Write-Host ""
+        Write-Host "[CMake]"
+
+        $apps |
+          Where-Object {
+            $_.DisplayName -match '(?i)^CMake\b'
           } |
           ForEach-Object {
             Write-Host "  $($_.DisplayName)"
