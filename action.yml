@@ -1,11 +1,11 @@
-name: Windows Debloat & Cleanup
+name: Windows Debloater
 description: Aggressive Windows runner cleanup with selected development tools preserved
-author: Windows Debloat & Cleanup
+author: Veniamin668
 
 branding:
   icon: trash-2
   color: red
-  
+
 inputs:
   enable:
     description: Enable cleanup
@@ -19,6 +19,7 @@ inputs:
 
 runs:
   using: composite
+
   steps:
 
     # ============================================================
@@ -48,13 +49,20 @@ runs:
         )
 
         foreach ($name in $services) {
-          $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+
+          $service = Get-Service `
+            -Name $name `
+            -ErrorAction SilentlyContinue
 
           if ($null -ne $service) {
+
             Write-Host "[STOP] $name"
 
             try {
-              Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+              Stop-Service `
+                -Name $name `
+                -Force `
+                -ErrorAction SilentlyContinue
             }
             catch {
               Write-Warning "Failed to stop service: $name"
@@ -94,8 +102,13 @@ runs:
         )
 
         foreach ($name in $processes) {
-          Get-Process -Name $name -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
+
+          Get-Process `
+            -Name $name `
+            -ErrorAction SilentlyContinue |
+            Stop-Process `
+              -Force `
+              -ErrorAction SilentlyContinue
         }
 
 
@@ -112,9 +125,11 @@ runs:
         $path = 'C:\hostedtoolcache'
 
         if (Test-Path -LiteralPath $path) {
+
           Write-Host "[REMOVE] $path"
 
           try {
+
             Remove-Item `
               -LiteralPath $path `
               -Recurse `
@@ -122,19 +137,23 @@ runs:
               -ErrorAction Stop
 
             Write-Host "[REMOVED] $path"
+
           }
           catch {
+
             Write-Warning "Failed to completely remove $path"
             Write-Warning $_
           }
+
         }
         else {
+
           Write-Host "[NOT FOUND] $path"
         }
 
 
     # ============================================================
-    # REMOVE ANDROID FROM PROGRAM FILES (X86)
+    # REMOVE ANDROID
     # ============================================================
 
     - name: Remove Android directory
@@ -160,9 +179,11 @@ runs:
           }
 
         foreach ($dir in $androidDirs) {
+
           Write-Host "[REMOVE] $($dir.FullName)"
 
           try {
+
             Remove-Item `
               -LiteralPath $dir.FullName `
               -Recurse `
@@ -170,8 +191,10 @@ runs:
               -ErrorAction Stop
 
             Write-Host "[REMOVED] $($dir.FullName)"
+
           }
           catch {
+
             Write-Warning "Failed to remove $($dir.FullName)"
             Write-Warning $_
           }
@@ -198,10 +221,13 @@ runs:
         $apps = @()
 
         foreach ($path in $registryPaths) {
+
           try {
+
             $apps += Get-ItemProperty `
               -Path $path `
               -ErrorAction SilentlyContinue
+
           }
           catch {
           }
@@ -227,23 +253,7 @@ runs:
 
 
     # ============================================================
-    # ALLOWLIST CLEANUP
-    #
-    # KEEP:
-    #   Firefox
-    #   Visual Studio
-    #   Git
-    #   7-Zip
-    #   GitHub CLI
-    #   Tailscale
-    #   Docker
-    #   WSL
-    #   Kubernetes
-    #   Node.js / npm / npx
-    #   PowerShell 7
-    #
-    # REMOVE:
-    #   Everything else with a registered uninstaller
+    # UNIVERSAL ALLOWLIST CLEANUP
     # ============================================================
 
     - name: Remove everything except allowlist
@@ -251,6 +261,7 @@ runs:
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Continue'
+
 
         # ========================================================
         # ALLOWLIST
@@ -263,117 +274,135 @@ runs:
           # ------------------------------------------------------
 
           '(?i)\bMozilla Firefox\b',
-          '(?i)^Firefox\b',
+          '(?i)^Firefox\b'
+
 
           # ------------------------------------------------------
           # 7-ZIP
           # ------------------------------------------------------
 
-          '(?i)^7-Zip\b',
-          '(?i)^7-Zip [0-9]',
-          '(?i)^7-Zip Extra\b',
-          
+          ,'(?i)^7-Zip\b'
+          ,'(?i)^7-Zip [0-9]'
+          ,'(?i)^7-Zip Extra\b'
+
+
           # ------------------------------------------------------
           # VISUAL STUDIO
           # ------------------------------------------------------
 
-          '(?i)\bMicrosoft Visual Studio\b',
-          '(?i)^Visual Studio\b',
-          '(?i)^Visual Studio Build Tools\b',
-          '(?i)^Visual Studio Installer\b',
-          '(?i)^VS Installer\b',
-          '(?i)^vs_',
-          '(?i)^sptools_Microsoft\.VisualStudio',
-          '(?i)^Microsoft Visual Studio Setup',
+          ,'(?i)\bMicrosoft Visual Studio\b'
+          ,'(?i)^Visual Studio\b'
+          ,'(?i)^Visual Studio Build Tools\b'
+          ,'(?i)^Visual Studio Installer\b'
+          ,'(?i)^VS Installer\b'
+          ,'(?i)^vs_'
+          ,'(?i)^sptools_Microsoft\.VisualStudio'
+          ,'(?i)^Microsoft Visual Studio Setup'
+
 
           # ------------------------------------------------------
           # GIT
           # ------------------------------------------------------
 
-          '(?i)^Git$',
-          '(?i)^Git for Windows\b',
-          '(?i)^Git Credential Manager',
+          ,'(?i)^Git$'
+          ,'(?i)^Git for Windows\b'
+          ,'(?i)^Git Credential Manager'
+
 
           # ------------------------------------------------------
           # GITHUB CLI
           # ------------------------------------------------------
 
-          '(?i)^GitHub CLI$',
-          '(?i)^GitHub Command Line Interface\b',
+          ,'(?i)^GitHub CLI$'
+          ,'(?i)^GitHub Command Line Interface\b'
+
 
           # ------------------------------------------------------
           # TAILSCALE
           # ------------------------------------------------------
 
-          '(?i)^Tailscale\b',
-          '(?i)^Tailscale VPN\b',
+          ,'(?i)^Tailscale\b'
+          ,'(?i)^Tailscale VPN\b'
+
 
           # ------------------------------------------------------
           # DOCKER
           # ------------------------------------------------------
 
-          '(?i)^Docker\b',
-          '(?i)^Docker Desktop\b',
-          '(?i)^Docker Engine\b',
-          '(?i)^Docker Compose\b',
-          '(?i)^Docker CLI\b',
-          '(?i)^Docker CE\b',
-          '(?i)^Docker Inc\.',
-          '(?i)^Docker Desktop Installer\b',
+          ,'(?i)^Docker\b'
+          ,'(?i)^Docker Desktop\b'
+          ,'(?i)^Docker Engine\b'
+          ,'(?i)^Docker Compose\b'
+          ,'(?i)^Docker CLI\b'
+          ,'(?i)^Docker CE\b'
+          ,'(?i)^Docker Inc\.'
+          ,'(?i)^Docker Desktop Installer\b'
+
 
           # ------------------------------------------------------
           # WSL
           # ------------------------------------------------------
 
-          '(?i)^Windows Subsystem for Linux\b',
-          '(?i)^WSL\b',
-          '(?i)^Windows Subsystem for Linux Update\b',
+          ,'(?i)^Windows Subsystem for Linux\b'
+          ,'(?i)^WSL\b'
+          ,'(?i)^Windows Subsystem for Linux Update\b'
 
-          # Linux distributions commonly registered as apps
-          '(?i)^Ubuntu\b',
-          '(?i)^Debian\b',
-          '(?i)^Kali Linux\b',
-          '(?i)^Oracle Linux\b',
-          '(?i)^SUSE Linux\b',
-          '(?i)^openSUSE\b',
+
+          # WSL distributions
+
+          ,'(?i)^Ubuntu\b'
+          ,'(?i)^Debian\b'
+          ,'(?i)^Kali Linux\b'
+          ,'(?i)^Oracle Linux\b'
+          ,'(?i)^SUSE Linux\b'
+          ,'(?i)^openSUSE\b'
+
 
           # ------------------------------------------------------
           # KUBERNETES
           # ------------------------------------------------------
 
-          '(?i)^Kubernetes\b',
-          '(?i)^Kubernetes CLI\b',
-          '(?i)^kubectl\b',
-          '(?i)^Minikube\b',
-          '(?i)^kind\b',
+          ,'(?i)^Kubernetes\b'
+          ,'(?i)^Kubernetes CLI\b'
+          ,'(?i)^kubectl\b'
+          ,'(?i)^Minikube\b'
+          ,'(?i)^kind\b'
+
 
           # ------------------------------------------------------
           # NODE.JS
           # ------------------------------------------------------
 
-          '(?i)^Node\.js\b',
-          '(?i)^NodeJS\b',
-          '(?i)^Node\.js Runtime\b',
-          '(?i)^npm\b',
-          '(?i)^npx\b',
+          ,'(?i)^Node\.js\b'
+          ,'(?i)^NodeJS\b'
+          ,'(?i)^Node\.js Runtime\b'
+          ,'(?i)^npm\b'
+          ,'(?i)^npx\b'
+
 
           # ------------------------------------------------------
           # POWERSHELL 7
           # ------------------------------------------------------
 
-          '(?i)^PowerShell 7\b',
-          '(?i)^PowerShell 7-preview\b',
-          '(?i)^PowerShell Core\b',
-          '(?i)^PowerShell\b'
+          ,'(?i)^PowerShell 7\b'
+          ,'(?i)^PowerShell 7-preview\b'
+          ,'(?i)^PowerShell Core\b'
+          ,'(?i)^PowerShell\b'
         )
 
 
+        # ========================================================
+        # ALLOWLIST TEST
+        # ========================================================
+
         function Test-Allowlist {
+
           param(
             [string]$Name
           )
 
           foreach ($pattern in $allowPatterns) {
+
             if ($Name -match $pattern) {
               return $true
             }
@@ -384,7 +413,7 @@ runs:
 
 
         # ========================================================
-        # GET INSTALLED SOFTWARE
+        # GET INSTALLED APPLICATIONS
         # ========================================================
 
         $registryPaths = @(
@@ -397,10 +426,13 @@ runs:
         $apps = @()
 
         foreach ($path in $registryPaths) {
+
           try {
+
             $apps += Get-ItemProperty `
               -Path $path `
               -ErrorAction SilentlyContinue
+
           }
           catch {
           }
@@ -413,6 +445,10 @@ runs:
           Sort-Object DisplayName, PSPath -Unique
 
 
+        # ========================================================
+        # COUNTERS
+        # ========================================================
+
         $removed = 0
         $kept = 0
         $failed = 0
@@ -420,20 +456,363 @@ runs:
 
 
         # ========================================================
-        # PROCESS EACH APPLICATION
+        # HELPER: CHECK REGISTRY ENTRY
+        # ========================================================
+
+        function Test-AppStillInstalled {
+
+          param(
+            $App
+          )
+
+          if ([string]::IsNullOrWhiteSpace($App.PSPath)) {
+            return $false
+          }
+
+          try {
+
+            return Test-Path `
+              -LiteralPath $App.PSPath `
+              -ErrorAction SilentlyContinue
+
+          }
+          catch {
+
+            return $false
+          }
+        }
+
+
+        # ========================================================
+        # HELPER: WAIT FOR UNINSTALL
+        # ========================================================
+
+        function Wait-AppRemoval {
+
+          param(
+            $App,
+            [int]$Seconds = 15
+          )
+
+          for ($i = 0; $i -lt $Seconds; $i++) {
+
+            Start-Sleep -Seconds 1
+
+            if (-not (Test-AppStillInstalled -App $App)) {
+              return $true
+            }
+          }
+
+          return (-not (Test-AppStillInstalled -App $App))
+        }
+
+
+        # ========================================================
+        # HELPER: RUN COMMAND
+        # ========================================================
+
+        function Invoke-UninstallCommand {
+
+          param(
+            [string]$Command,
+            [string]$DisplayName
+          )
+
+          if ([string]::IsNullOrWhiteSpace($Command)) {
+            return $null
+          }
+
+          Write-Host "[COMMAND] $Command"
+
+          try {
+
+            $process = Start-Process `
+              -FilePath 'cmd.exe' `
+              -ArgumentList '/d', '/s', '/c', $Command `
+              -Wait `
+              -PassThru `
+              -NoNewWindow
+
+            Write-Host "[EXIT CODE] $($process.ExitCode)"
+
+            return $process.ExitCode
+
+          }
+          catch {
+
+            Write-Warning "Failed to execute uninstaller for $DisplayName"
+            Write-Warning $_
+
+            return $null
+          }
+        }
+
+
+        # ========================================================
+        # HELPER: BUILD UNIVERSAL COMMAND
+        # ========================================================
+
+        function Get-UniversalUninstallCommand {
+
+          param(
+            $App
+          )
+
+          $name = [string]$App.DisplayName
+
+          # ------------------------------------------------------
+          # QuietUninstallString has highest priority
+          # ------------------------------------------------------
+
+          if (-not [string]::IsNullOrWhiteSpace($App.QuietUninstallString)) {
+
+            Write-Host "[TYPE] QuietUninstallString"
+
+            return [string]$App.QuietUninstallString
+          }
+
+
+          $command = [string]$App.UninstallString
+
+
+          if ([string]::IsNullOrWhiteSpace($command)) {
+            return $null
+          }
+
+
+          # ------------------------------------------------------
+          # EDGE / WEBVIEW2
+          # ------------------------------------------------------
+
+          if (
+            $name -match '(?i)(Microsoft Edge|Edge WebView2|WebView2)'
+          ) {
+
+            if (
+              $command -match '(?i)setup\.exe'
+            ) {
+
+              $exeMatch = [regex]::Match(
+                $command,
+                '(?i)(?:"([^"]*setup\.exe)"|([^\s]+setup\.exe))'
+              )
+
+              if ($exeMatch.Success) {
+
+                if ($exeMatch.Groups[1].Success) {
+                  $exe = $exeMatch.Groups[1].Value
+                }
+                else {
+                  $exe = $exeMatch.Groups[2].Value
+                }
+
+                Write-Host "[TYPE] Microsoft Edge/WebView2"
+
+                return "`"$exe`" --uninstall --system-level --force-uninstall"
+              }
+            }
+          }
+
+
+          # ------------------------------------------------------
+          # ANACONDA
+          # ------------------------------------------------------
+
+          if (
+            $name -match '(?i)(Anaconda|Anaconda3|Miniconda)'
+          ) {
+
+            if (
+              $command -match '(?i)(Uninstall-Anaconda|unins\d*\.exe|uninstall\.exe)'
+            ) {
+
+              Write-Host "[TYPE] Anaconda/Miniconda"
+
+              if ($command -notmatch '(?i)\s/(S|silent|verysilent)\b') {
+                $command += ' /S'
+              }
+
+              return $command
+            }
+          }
+
+
+          # ------------------------------------------------------
+          # POSTGRESQL
+          # ------------------------------------------------------
+
+          if (
+            $name -match '(?i)PostgreSQL'
+          ) {
+
+            if (
+              $command -match '(?i)(uninstall.*\.exe|uninstaller\.exe)'
+            ) {
+
+              Write-Host "[TYPE] PostgreSQL"
+
+              if (
+                $command -notmatch '(?i)(--mode|/quiet|/silent|/verysilent)'
+              ) {
+                $command += ' --mode unattended'
+              }
+
+              return $command
+            }
+          }
+
+
+          # ------------------------------------------------------
+          # AZURE SERVICE FABRIC / CUSTOM BATCH UNINSTALLERS
+          # ------------------------------------------------------
+
+          if (
+            $name -match '(?i)(Azure Service Fabric|Service Fabric)'
+          ) {
+
+            if (
+              $command -match '(?i)\.(bat|cmd)(?:["\s]|$)'
+            ) {
+
+              Write-Host "[TYPE] Service Fabric batch uninstaller"
+
+              return $command
+            }
+          }
+
+
+          # ------------------------------------------------------
+          # BAT / CMD
+          # ------------------------------------------------------
+
+          if (
+            $command -match '(?i)\.(bat|cmd)(?:["\s]|$)'
+          ) {
+
+            Write-Host "[TYPE] Batch uninstaller"
+
+            return $command
+          }
+
+
+          # ------------------------------------------------------
+          # MSI
+          # ------------------------------------------------------
+
+          if (
+            $command -match '(?i)msiexec(?:\.exe)?'
+          ) {
+
+            Write-Host "[TYPE] MSI"
+
+            $command = $command -replace `
+              '(?i)\s+/I(?=\s|{)', `
+              ' /X'
+
+            $command = $command -replace `
+              '(?i)\s+/i(?=\s|{)', `
+              ' /X'
+
+            if (
+              $command -notmatch '(?i)\s/(quiet|qn)\b'
+            ) {
+              $command += ' /quiet /norestart'
+            }
+
+            return $command
+          }
+
+
+          # ------------------------------------------------------
+          # INNO SETUP
+          # ------------------------------------------------------
+
+          if (
+            $command -match '(?i)unins\d*\.exe'
+          ) {
+
+            Write-Host "[TYPE] Inno Setup"
+
+            if (
+              $command -notmatch '(?i)/VERYSILENT'
+            ) {
+
+              $command += `
+                ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
+            }
+
+            return $command
+          }
+
+
+          # ------------------------------------------------------
+          # NSIS
+          # ------------------------------------------------------
+
+          if (
+            $command -match '(?i)(uninstall|uninstaller)\.exe'
+          ) {
+
+            Write-Host "[TYPE] NSIS/EXE uninstaller"
+
+            if (
+              $command -notmatch '(?i)\s/S\b'
+            ) {
+
+              $command += ' /S'
+            }
+
+            return $command
+          }
+
+
+          # ------------------------------------------------------
+          # GENERIC EXE
+          #
+          # IMPORTANT:
+          # Do not blindly add arbitrary silent parameters.
+          # Use the vendor's original uninstall command.
+          # ------------------------------------------------------
+
+          if (
+            $command -match '(?i)\.exe'
+          ) {
+
+            Write-Host "[TYPE] Generic EXE uninstaller"
+
+            return $command
+          }
+
+
+          # ------------------------------------------------------
+          # FALLBACK
+          # ------------------------------------------------------
+
+          Write-Host "[TYPE] Generic uninstall command"
+
+          return $command
+        }
+
+
+        # ========================================================
+        # PROCESS APPLICATIONS
         # ========================================================
 
         foreach ($app in $apps) {
 
-          $name = $app.DisplayName
+          $name = [string]$app.DisplayName
+
 
           # ------------------------------------------------------
-          # KEEP ALLOWLIST
+          # KEEP
           # ------------------------------------------------------
 
           if (Test-Allowlist -Name $name) {
+
             Write-Host "[KEEP] $name"
+
             $kept++
+
             continue
           }
 
@@ -442,16 +821,18 @@ runs:
           # FIND UNINSTALL COMMAND
           # ------------------------------------------------------
 
-          $uninstall = $app.QuietUninstallString
-
-          if ([string]::IsNullOrWhiteSpace($uninstall)) {
-            $uninstall = $app.UninstallString
-          }
+          $uninstallCommand =
+            Get-UniversalUninstallCommand -App $app
 
 
-          if ([string]::IsNullOrWhiteSpace($uninstall)) {
+          if (
+            [string]::IsNullOrWhiteSpace($uninstallCommand)
+          ) {
+
             Write-Host "[NO UNINSTALLER] $name"
+
             $skipped++
+
             continue
           }
 
@@ -462,172 +843,80 @@ runs:
           Write-Host "============================================================"
 
 
-          try {
+          # ------------------------------------------------------
+          # EXECUTE
+          # ------------------------------------------------------
 
-            # ====================================================
-            # MSI
-            # ====================================================
-
-            if ($uninstall -match '(?i)msiexec(?:\.exe)?') {
-
-              $command = $uninstall
-
-              $command = $command -replace `
-                '(?i)\s+/I(?=\s|{)', `
-                ' /X'
-
-              $command = $command -replace `
-                '(?i)\s+/i(?=\s|{)', `
-                ' /X'
-
-              if ($command -notmatch '(?i)\s/(quiet|qn)\b') {
-                $command += ' /quiet /norestart'
-              }
-
-              Write-Host "MSI command:"
-              Write-Host $command
-
-              $process = Start-Process `
-                -FilePath 'cmd.exe' `
-                -ArgumentList "/c $command" `
-                -Wait `
-                -PassThru `
-                -NoNewWindow
-
-              if (
-                $process.ExitCode -eq 0 -or
-                $process.ExitCode -eq 1605 -or
-                $process.ExitCode -eq 1614 -or
-                $process.ExitCode -eq 3010
-              ) {
-                Write-Host "[REMOVED] $name"
-                $removed++
-              }
-              else {
-                Write-Warning `
-                  "[FAILED] $name - MSI exit code $($process.ExitCode)"
-
-                $failed++
-              }
-
-              continue
-            }
+          $exitCode =
+            Invoke-UninstallCommand `
+              -Command $uninstallCommand `
+              -DisplayName $name
 
 
-            # ====================================================
-            # INNO SETUP
-            # ====================================================
+          # ------------------------------------------------------
+          # ACCEPT COMMON SUCCESS CODES
+          # ------------------------------------------------------
 
-            if ($uninstall -match '(?i)unins\d*\.exe') {
-
-              $command = $uninstall
-
-              if ($command -notmatch '(?i)/VERYSILENT') {
-                $command += `
-                  ' /VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
-              }
-
-              Write-Host "Inno Setup command:"
-              Write-Host $command
-
-              $process = Start-Process `
-                -FilePath 'cmd.exe' `
-                -ArgumentList "/c $command" `
-                -Wait `
-                -PassThru `
-                -NoNewWindow
-
-              if (
-                $process.ExitCode -eq 0 -or
-                $process.ExitCode -eq 3010
-              ) {
-                Write-Host "[REMOVED] $name"
-                $removed++
-              }
-              else {
-                Write-Warning `
-                  "[FAILED] $name - exit code $($process.ExitCode)"
-
-                $failed++
-              }
-
-              continue
-            }
+          $successCode = (
+            $exitCode -eq 0 -or
+            $exitCode -eq 1605 -or
+            $exitCode -eq 1614 -or
+            $exitCode -eq 3010
+          )
 
 
-            # ====================================================
-            # NSIS
-            # ====================================================
+          if ($successCode) {
 
-            if ($uninstall -match '(?i)uninstall\.exe') {
+            Write-Host "[UNINSTALLER SUCCESS] $name"
+          }
+          else {
 
-              $command = $uninstall
-
-              if ($command -notmatch '(?i)\s/S\b') {
-                $command += ' /S'
-              }
-
-              Write-Host "NSIS command:"
-              Write-Host $command
-
-              $process = Start-Process `
-                -FilePath 'cmd.exe' `
-                -ArgumentList "/c $command" `
-                -Wait `
-                -PassThru `
-                -NoNewWindow
-
-              if (
-                $process.ExitCode -eq 0 -or
-                $process.ExitCode -eq 3010
-              ) {
-                Write-Host "[REMOVED] $name"
-                $removed++
-              }
-              else {
-                Write-Warning `
-                  "[FAILED] $name - exit code $($process.ExitCode)"
-
-                $failed++
-              }
-
-              continue
-            }
-
-
-            # ====================================================
-            # UNKNOWN EXE
-            # ====================================================
-
-            if ($uninstall -match '(?i)\.exe') {
+            if ($null -ne $exitCode) {
 
               Write-Warning `
-                "[SKIP] Unknown EXE uninstaller: $name"
+                "[UNINSTALLER EXIT CODE] $name : $exitCode"
+            }
+          }
+
+
+          # ------------------------------------------------------
+          # WAIT FOR REGISTRY ENTRY TO DISAPPEAR
+          # ------------------------------------------------------
+
+          Write-Host "[CHECK] Waiting for uninstall registration to disappear..."
+
+          $gone =
+            Wait-AppRemoval `
+              -App $app `
+              -Seconds 15
+
+
+          if ($gone) {
+
+            Write-Host "[REMOVED] $name"
+
+            $removed++
+          }
+          else {
+
+            if ($successCode) {
+
+              Write-Host `
+                "[UNINSTALLER FINISHED] $name"
 
               Write-Warning `
-                "Command: $uninstall"
+                "[REGISTRY ENTRY STILL PRESENT] $name"
 
               $skipped++
-              continue
+
             }
+            else {
 
+              Write-Warning `
+                "[FAILED] $name"
 
-            # ====================================================
-            # UNKNOWN
-            # ====================================================
-
-            Write-Warning `
-              "[SKIP] Unsupported uninstaller: $name"
-
-            $skipped++
-
-          }
-          catch {
-
-            Write-Warning "[ERROR] $name"
-            Write-Warning $_
-
-            $failed++
+              $failed++
+            }
           }
         }
 
@@ -687,10 +976,14 @@ runs:
           Write-Host "[DELETE SERVICE] $name"
 
           try {
+
             & sc.exe delete $name
+
           }
           catch {
-            Write-Warning "Could not delete service: $name"
+
+            Write-Warning `
+              "Could not delete service: $name"
           }
         }
 
@@ -715,6 +1008,7 @@ runs:
         $apps = @()
 
         foreach ($path in $registryPaths) {
+
           $apps += Get-ItemProperty `
             -Path $path `
             -ErrorAction SilentlyContinue
@@ -739,6 +1033,18 @@ runs:
         $apps |
           Where-Object {
             $_.DisplayName -match '(?i)Firefox'
+          } |
+          ForEach-Object {
+            Write-Host "  $($_.DisplayName)"
+          }
+
+
+        Write-Host ""
+        Write-Host "[7-Zip]"
+
+        $apps |
+          Where-Object {
+            $_.DisplayName -match '(?i)^7-Zip\b'
           } |
           ForEach-Object {
             Write-Host "  $($_.DisplayName)"
