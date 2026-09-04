@@ -20,6 +20,7 @@ The following software is preserved:
 - npm
 - npx
 - PowerShell 7
+- 7-Zip
 
 ## What gets removed
 
